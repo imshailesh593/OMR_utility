@@ -1,0 +1,17 @@
+# environments and build output
+.venv/
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+
+# runtime data (databases, scanned pages, API keys) - never commit
+data/
+settings.json
+*.omrproject
+
+# editor / OS
+.vscode/
+.idea/
+Thumbs.db

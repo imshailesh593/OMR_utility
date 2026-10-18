@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OMR Utility</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--ink:#1d2330;--mut:#6b7385;--line:#dde1e8;--acc:#2f5bea;--ok:#1a8f4c;--warn:#fff3cd;--warnb:#e0b100;--bad:#c0392b}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.4 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:#1d2330;color:#fff;display:flex;align-items:center;gap:24px;padding:0 20px;height:48px}
+header h1{font-size:16px;margin:0}
+nav button{background:none;border:0;color:#aab;padding:14px 12px;cursor:pointer;font-size:14px;border-bottom:3px solid transparent;border-radius:0}
+nav button.on{color:#fff;border-color:var(--acc)}
+main{padding:20px;max-width:1600px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}
+h2{font-size:16px;margin:0 0 12px}
+button,.btn{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px;text-decoration:none;display:inline-block}
+button.sec,.btn.sec{background:#e8ebf2;color:var(--ink)}
+button.ok{background:var(--ok)} button.bad{background:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+input,select{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.mut{color:var(--mut)}
+table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid var(--line);padding:6px;text-align:left;vertical-align:middle}
+th{background:#f0f2f6;position:sticky;top:0;z-index:1}
+.tbl{overflow:auto;max-height:68vh}
+td input,td select{width:100%;min-width:90px}
+table.rv{min-width:2100px}
+td.scan{min-width:400px;width:400px}
+td img{display:block;width:100%;border:1px solid var(--line);background:#fafafa}
+td.low input,td.low select{background:var(--warn);border-color:var(--warnb)}
+td.dup input{border-color:var(--bad);box-shadow:0 0 0 1px var(--bad)}
+tr.done{background:#eef9f2}
+tr.header{background:#eee;opacity:.65}
+tr.pagehead td{background:#e8ebf2;font-weight:600}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#e8ebf2}
+.pill.ok{background:#d6f1e1;color:var(--ok)}
+.pill.bad{background:#f8d7d3;color:var(--bad)}
+.chips label{display:inline-flex;gap:4px;align-items:center;border:1px solid var(--line);border-radius:16px;padding:3px 10px;margin:0 6px 6px 0;cursor:pointer;background:#fff}
+.chips input{width:auto;min-width:0;padding:0}
+.glist{display:grid;grid-template-columns:260px 1fr;gap:16px}
+.gitem{padding:8px 10px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;display:flex;justify-content:space-between}
+.gitem.on{border-color:var(--acc);background:#eef2ff}
+.bar{height:10px;background:#e8ebf2;border-radius:6px;overflow:hidden;min-width:260px;flex:1}
+.bar i{display:block;height:100%;background:var(--acc);transition:width .4s}
+[hidden]{display:none!important}
+.sticky{position:sticky;top:0;z-index:5;background:var(--card)}
+dialog{border:0;border-radius:8px;padding:0;max-width:90vw}
+dialog img{max-width:85vw;max-height:85vh;display:block}
+#msg{position:fixed;bottom:16px;right:16px;background:#1d2330;color:#fff;padding:10px 16px;border-radius:6px;display:none;z-index:9;max-width:520px}
+</style>
+</head>
+<body>
+<header>
+  <h1>OMR Utility</h1>
+  <nav id="nav">
+    <button data-t="projects">Projects</button>
+    <button data-t="scan" class="on">1. Scan</button>
+    <button data-t="pages">2. Scanned pages</button>
+    <button data-t="review">3. Review &amp; edit</button>
+    <button data-t="groups">4. Groups &amp; export</button>
+  </nav>
+  <button id="projchip" class="sec" title="Switch or save projects" style="margin-left:auto">Project: ...</button>
+</header>
+<main>
+  <section id="projects" hidden></section>
+  <section id="scan"></section>
+  <section id="pages" hidden></section>
+  <section id="review" hidden></section>
+  <section id="groups" hidden></section>
+</main>
+<dialog id="dlg"><img id="dlgimg"></dialog>
+<div id="msg"></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const h = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "class") e.className = v;
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) if (c != null) e.append(c.nodeType ? c : document.createTextNode(c));
+  return e;
+};
+// like Element.append but accepts nested arrays and skips empty values
+const put_in = (el, ...kids) => { for (const c of kids.flat(Infinity)) if (c != null && c !== false) el.append(c.nodeType ? c : document.createTextNode(c)); return el; };
+const api = async (url, opt = {}) => {
+  if (opt.json !== undefined) { opt.body = JSON.stringify(opt.json); opt.headers = { "Content-Type": "application/json" }; }
+  const r = await fetch(url, opt);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || r.statusText);
+  return d;
+};
+const toast = (t, ms = 4000) => { const m = $("#msg"); m.textContent = t; m.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => m.style.display = "none", ms); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const LOW = 0.85;
+const COLS = [["first", "First name"], ["middle", "Middle name"], ["last", "Last name"], ["number", "Contact (as read)"], ["phones", "Phones (cleaned)"], ["meal", "Meal (D/L)"], ["other", "Other text"], ["raw", "Full scanned row"]];
+
+const S = { batch: null, sel: new Set(), filter: "all", q: "", group: null, undo: [], exp: { cols: COLS.map(c => c[0]), meta: false, split: true, fmt: "csv" } };
+
+function show(t) {
+  clearTimeout(S.autoTimer); clearTimeout(S.pgTimer);
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.t === t));
+  document.querySelectorAll("main > section").forEach(s => s.hidden = s.id !== t);
+  ({ projects: renderProjects, scan: renderScan, pages: renderPages, review: renderReview, groups: renderGroups })[t]();
+}
+$("#nav").onclick = e => e.target.dataset.t && show(e.target.dataset.t);
+$("#projchip").onclick = () => show("projects");
+const refreshChip = async () => { try { const d = await api("/api/projects"); const c = d.projects.find(p => p.current); $("#projchip").textContent = "Project: " + (c ? c.name : "?"); } catch (e) { /* ignore */ } };
+refreshChip();
+
+// Save an export: a Save As dialog in the desktop app, a normal download in a browser
+async function doExport(query) {
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.save_export) {
+    try {
+      const path = await window.pywebview.api.save_export(query);
+      toast(path ? "Saved to " + path : "Export cancelled", 6000);
+    } catch (e) { toast("Could not save: " + e); }
+  } else window.location.href = "/api/export?" + query;
+}
+const exportQuery = (scope, forceSplit) => {
+  const x = S.exp;
+  return `scope=${scope}&cols=${x.cols.join(",")}&meta=${x.meta ? 1 : 0}&fmt=${x.fmt}&split=${(forceSplit ?? x.split) ? 1 : 0}`;
+};
+
+/* ---------------- Projects ---------------- */
+const inDesktop = () => !!(window.pywebview && window.pywebview.api && window.pywebview.api.choose_save_path);
+async function renderProjects() {
+  const root = $("#projects"); root.replaceChildren();
+  const d = await api("/api/projects");
+  const nn = h("input", { placeholder: "New project name, e.g. Dinner list October" });
+  const reloadTo = hash => { location.hash = hash; location.reload(); };
+  const guard = fn => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message, 9000); } };
+  const create = guard(async () => {
+    if (!nn.value.trim()) return toast("Give the project a name");
+    await api("/api/projects", { method: "POST", json: { name: nn.value } }); S.batch = null; reloadTo("#scan"); });
+  const importBtn = h("button", { class: "sec", onclick: guard(async () => {
+    if (inDesktop()) {
+      const path = await window.pywebview.api.choose_open_path(); if (!path) return;
+      toast("Importing...", 600000);
+      const r = await api("/api/projects/import", { method: "POST", json: { path } }); toast(`Imported "${r.name}". Click Open to use it.`, 8000); renderProjects();
+    } else fileIn.click();
+  }) }, "Open a saved project file...");
+  const fileIn = h("input", { type: "file", accept: ".omrproject,.zip", hidden: true, onchange: guard(async e => {
+    const fd = new FormData(); fd.append("file", e.target.files[0]); toast("Importing...", 600000);
+    const r = await api("/api/projects/import", { method: "POST", body: fd }); toast(`Imported "${r.name}". Click Open to use it.`, 8000); renderProjects(); }) });
+  put_in(root, h("div", { class: "card" }, h("h2", {}, "Projects"),
+    h("p", { class: "mut" }, "A project is one job, for example one list of 180 pages. Its scanned pages, readings, edits and groups are kept apart from your other projects, and everything is saved automatically. Use Save to file for a backup you can copy to a USB drive or another laptop, and Open a saved project file to restore it. API keys and options are not stored in the file."),
+    d.busy ? h("p", { class: "pill bad" }, "Pages are being read right now: switching projects is disabled until that finishes.") : "",
+    h("div", { class: "row" }, nn, h("button", { onclick: create }, "Create and open"), importBtn, fileIn)),
+    d.projects.map(p => {
+      const st = p.stats;
+      const name = h("input", { value: p.name, style: "font-weight:600;font-size:15px;min-width:280px", onchange: guard(async e => { await api("/api/projects/" + p.id, { method: "PUT", json: { name: e.target.value } }); refreshChip(); toast("Renamed"); }) });
+      return h("div", { class: "card" + (p.current ? "" : "") , style: p.current ? "border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)" : "" },
+        h("div", { class: "row" }, name, p.current ? h("span", { class: "pill ok" }, "open now") : "",
+          p.current ? "" : h("button", { disabled: d.busy, onclick: guard(async () => { await api(`/api/projects/${p.id}/open`, { method: "POST", json: {} }); S.batch = null; reloadTo("#scan"); }) }, "Open"),
+          h("button", { class: "sec", onclick: guard(async () => {
+            if (inDesktop()) {
+              const path = await window.pywebview.api.choose_save_path(p.name.replace(/[\\/:*?"<>|]+/g, "_") + ".omrproject"); if (!path) return;
+              toast("Saving project file...", 600000);
+              const r = await api(`/api/projects/${p.id}/save-to`, { method: "POST", json: { path } }); toast(`Saved (${r.size_mb} MB): ${r.path}`, 9000);
+            } else window.location.href = `/api/projects/${p.id}/package`;
+          }) }, "Save to file..."),
+          p.current ? "" : h("button", { class: "bad", onclick: guard(async e => {
+            if (e.target.textContent !== "Sure?") { e.target.textContent = "Sure?"; return; }
+            await api("/api/projects/" + p.id, { method: "DELETE" }); renderProjects(); }) }, "Delete")),
+        h("div", { class: "mut" }, `${st.scans} pages scanned (${st.waiting} waiting, ${st.scraped} read, ${st.failed} failed) - ${st.batches} batches - ${st.rows} rows (${st.confirmed} confirmed) - ${st.groups} groups - ${st.size_mb} MB on disk`),
+        h("div", { class: "mut" }, `Created ${p.created}, last opened ${p.opened}`));
+    }));
+}
+
+/* ---------------- Scan ---------------- */
+async function renderScan() {
+  const root = $("#scan"); root.replaceChildren();
+  const [bs, st] = await Promise.all([api("/api/batches"), api("/api/settings")]);
+
+  const eng = h("select", { onchange: async e => { await api("/api/settings", { method: "PUT", json: { engine: e.target.value } }); } },
+    h("option", { value: "local", selected: st.engine === "local" }, "Local OCR (offline, free)"),
+    h("option", { value: "ai", selected: st.engine === "ai" }, "AI - cloud vision (needs API key + internet)"));
+  const isG = () => provider.value === "gemini";
+  const provider = h("select", { onchange: async e => { await api("/api/settings", { method: "PUT", json: { provider: e.target.value } }); renderScan(); } },
+    h("option", { value: "claude", selected: st.provider === "claude" }, "Claude (Anthropic)"),
+    h("option", { value: "gemini", selected: st.provider === "gemini" }, "Gemini (Google)"));
+  const g = st.provider === "gemini";
+  const key = h("input", { type: "password", style: "min-width:280px",
+    placeholder: g ? (st.gemini_key_set ? "Gemini key saved - type to replace" : (st.gemini_env_key ? "Using GEMINI_API_KEY from this PC" : "Gemini API key (AIza...)"))
+                   : (st.key_set ? "API key saved - type to replace" : (st.env_key ? "Using ANTHROPIC_API_KEY from this PC" : "sk-ant-...")) });
+  const model = g ? h("input", { value: st.gemini_model, list: "gmodels", style: "min-width:200px", title: "Any Gemini model id" })
+                  : h("select", {}, st.models.map(m => h("option", { value: m, selected: m === st.model }, m)));
+  const gl = h("datalist", { id: "gmodels" }, st.gemini_models.map(m => h("option", { value: m })));
+  const msg = h("span", { class: "mut" });
+  const onlyMarked = h("select", { onchange: async e => { await api("/api/settings", { method: "PUT", json: { only_marked: e.target.value === "marked" } }); toast(e.target.value === "marked" ? "Dinner/lunch mode: only rows with D, L or a check mark are kept" : "Full mode: every row is kept"); } },
+    h("option", { value: "all", selected: !st.only_marked }, "Keep every row (full scan)"),
+    h("option", { value: "marked", selected: st.only_marked }, "Dinner / lunch sheets: keep ONLY rows marked D, L or with a check mark"));
+  const setCard = h("div", { class: "card" }, h("h2", {}, "Reading options"),
+    h("p", { class: "mut" }, "AI mode sends the page images (names and phone numbers) to the Anthropic API to be transcribed. It reads handwriting, Devanagari and unclear digits better, but costs a little per page. The table layout is still found on this PC. If AI fails for a page it falls back to local OCR."),
+    h("div", { class: "row" }, h("b", {}, "What to keep:"), onlyMarked),
+    h("div", { class: "row" }, eng, provider, model, gl, key,
+      h("button", { class: "sec", onclick: async () => {
+        try {
+          await api("/api/settings", { method: "PUT", json: g ? { gemini_model: model.value, ...(key.value ? { gemini_key: key.value } : {}) } : { model: model.value, ...(key.value ? { api_key: key.value } : {}) } });
+          msg.textContent = "Testing..."; await api("/api/settings/test", { method: "POST", json: {} }); msg.textContent = "Connected"; key.value = "";
+        } catch (e) { msg.textContent = e.message; }
+      } }, "Save & test"),
+      (g ? st.gemini_key_set : st.key_set) ? h("button", { class: "bad", onclick: async () => { await api("/api/settings", { method: "PUT", json: g ? { gemini_key: "" } : { api_key: "" } }); renderScan(); } }, "Remove key") : "", msg),
+    g ? h("p", { class: "mut" }, "Privacy note: Gemini keys on Google's free tier may let Google use what you send to improve its products. These pages contain names and phone numbers, so use a paid / billing-enabled key if that matters.") : "");
+
+  // ---- scanner card (Canon G2000 etc. via Windows WIA)
+  const devSel = h("select", {}), scanMsg = h("span", { class: "mut" }), thumbs = h("div", { class: "row" });
+  const dpi = h("select", {}, [[200, "200 dpi (fast)"], [300, "300 dpi (recommended)"], [400, "400 dpi"], [600, "600 dpi (scanner maximum, slow)"]].map(v => h("option", { value: v[0], selected: v[0] === 300 }, v[1])));
+  const mode = h("select", {}, h("option", { value: "color" }, "Colour (needed for blue-pen D/L)"), h("option", { value: "gray" }, "Grey"));
+  const size = h("select", {}, [["a4", "A4"], ["letter", "Letter"], ["legal", "Legal"]].map(v => h("option", { value: v[0] }, v[1])));
+  const scanName = h("input", { placeholder: "Batch name (optional)" });
+  const readBtn = h("button", { class: "ok" }, "Read all scanned pages");
+  const showPages = pages => {
+    thumbs.replaceChildren(...pages.map(p => h("div", { style: "text-align:center" },
+      h("img", { src: p.thumb, style: "height:110px;border:1px solid var(--line);cursor:zoom-in", onclick: () => { $("#dlgimg").src = p.url; $("#dlg").showModal(); } }),
+      h("div", {}, `Page ${p.n} (scan #${p.id}) `, h("a", { href: "#", title: "Remove from this list (it stays in the Scanned pages log as discarded)", onclick: async e => { e.preventDefault(); showPages((await api(`/api/scans/${p.id}/discard`, { method: "POST", json: {} })).pages); } }, "remove")))));
+    readBtn.disabled = !pages.length; readBtn.textContent = pages.length ? `Read ${pages.length} scanned page${pages.length > 1 ? "s" : ""}` : "Read all scanned pages";
+  };
+  const loadDevices = async () => {
+    try {
+      const { devices } = await api("/api/scanner/devices");
+      devSel.replaceChildren(...(devices.length ? devices.map(d => h("option", { value: d.id }, d.name)) : [h("option", { value: "" }, "No scanner found")]));
+      scanMsg.textContent = devices.length ? "" : "No scanner found. Switch the scanner on, check the USB cable, then click Refresh.";
+    } catch (e) { scanMsg.textContent = e.message; }
+  };
+  const scanBtn = h("button", { onclick: async () => {
+    scanBtn.disabled = true; scanMsg.textContent = "Scanning... keep the lid closed (about 15-30 seconds)";
+    try { showPages((await api("/api/scanner/scan", { method: "POST", json: { device: devSel.value, dpi: +dpi.value, mode: mode.value, page: size.value } })).pages); scanMsg.textContent = "Done. Put the next page on the glass and scan again, or read the pages."; }
+    catch (e) { scanMsg.textContent = e.message; }
+    scanBtn.disabled = false;
+  } }, "Scan a page");
+  readBtn.onclick = async () => {
+    try { const { job, id } = await api("/api/scanner/process", { method: "POST", json: { name: scanName.value, engine: eng.value } }); showPages([]); await followJob(job, id); }
+    catch (e) { toast(e.message, 9000); }
+  };
+  api("/api/scanner/pages").then(r => showPages(r.pages)); loadDevices();
+  const autoText = h("span", { class: "mut" });
+  const pollAuto = async () => {
+    clearTimeout(S.autoTimer);
+    if ($("#scan").hidden) return;
+    try {
+      const a = await api("/api/autoread");
+      autoText.textContent = a.enabled || a.running || a.waiting ? `Auto-read: ${a.waiting} waiting, ${a.reading} being read` + (a.batch_id ? ` - into batch #${a.batch_id}` : "") + (a.error ? " - " + a.error : "") : "";
+      if (a.enabled || a.running || a.waiting) S.autoTimer = setTimeout(pollAuto, 3000);
+    } catch (e) { /* ignore */ }
+  };
+  const auto = h("input", { type: "checkbox", checked: st.autoread, onchange: async e => {
+    await api("/api/settings", { method: "PUT", json: { autoread: e.target.checked } });
+    toast(e.target.checked ? "Pages will now be read automatically while you scan" : "Auto-read off: use Read when you are ready"); pollAuto(); } });
+  pollAuto();
+  const scannerCard = h("div", { class: "card" }, h("h2", {}, "Scan from your scanner"),
+    h("p", { class: "mut" }, "The Canon G2000 is a flatbed: put one page face-down on the glass, click Scan a page, then repeat for every page. Click Read when all pages are scanned. Every scanned page is saved and tracked in the Scanned pages tab. Pages are scanned in colour so blue-pen marks are kept."),
+    h("div", { class: "row" }, devSel, h("button", { class: "sec", onclick: loadDevices }, "Refresh"), dpi, mode, size, scanBtn, scanMsg),
+    h("div", { class: "row" }, h("label", {}, auto, " Read each page automatically as it is scanned (best for many pages: scanning and reading overlap, all into one batch)"), autoText,
+      h("button", { class: "sec", onclick: async () => { await api("/api/autoread/new-batch", { method: "POST", json: {} }); toast("The next scanned page starts a new batch"); } }, "Start a new batch"),
+      h("button", { class: "sec", onclick: () => { S.batch = 0; S.sel.clear(); S.undo = []; show("review"); } }, "Review everything together")),
+    thumbs, h("div", { class: "row" }, scanName, readBtn));
+
+  const files = h("input", { type: "file", multiple: true, accept: ".pdf,image/*" });
+  const nm = h("input", { placeholder: "Batch name (optional)" });
+  const prog = h("div", { class: "row", hidden: true }), bar = h("i"), progText = h("span", { class: "mut" });
+  prog.append(h("div", { class: "bar" }, bar), progText);
+  const followJob = async (job, id) => {
+    prog.hidden = false; bar.style.width = "3%"; progText.textContent = "Opening files...";
+    try {
+      for (;;) {
+        await sleep(1200);
+        const j = await api("/api/jobs/" + job);
+        if (j.pages) { bar.style.width = Math.max(3, (j.done / j.pages) * 100) + "%"; progText.textContent = `Reading page ${Math.min(j.page, j.pages)} of ${j.pages}...`; }
+        if (j.status === "done") {
+          S.batch = id; S.sel.clear(); S.undo = [];
+          toast(`${j.pages} page(s) read with ${j.engine === "ai" ? "AI (" + j.provider + ")" : "local OCR"}` + (j.warnings.length ? " - " + j.warnings.join("; ") : ""), 8000);
+          return show("review");
+        }
+        if (j.status === "error") throw new Error(j.error);
+      }
+    } finally { prog.hidden = true; }
+  };
+  const go = h("button", { onclick: async () => {
+    if (!files.files.length) return toast("Choose PDF or image files");
+    const fd = new FormData(); fd.append("name", nm.value); fd.append("engine", eng.value);
+    for (const f of files.files) fd.append("files", f);
+    go.disabled = true;
+    try {
+      const { job, id } = await api("/api/batches", { method: "POST", body: fd });
+      await followJob(job, id);
+    } catch (e) { toast(e.message, 9000); }
+    go.disabled = false; prog.hidden = true;
+  } }, "Scan");
+
+  const batchRows = bs.map(b => {
+    const nameIn = h("input", { value: b.name, onchange: async e => { try { await api("/api/batches/" + b.id, { method: "PUT", json: { name: e.target.value } }); toast("Renamed"); } catch (x) { toast(x.message); } } });
+    return h("tr", {}, h("td", {}, nameIn, b.only_marked ? h("span", { class: "pill", title: "Only rows with D, L or a check mark were kept" }, "marked rows only") : ""), h("td", {}, b.pages), h("td", {}, b.total), h("td", {}, `${b.confirmed}/${b.total}`),
+      h("td", {}, h("button", { class: "sec", onclick: () => { S.batch = b.id; S.sel.clear(); S.undo = []; show("review"); } }, "Open"), " ",
+        h("button", { class: "bad", onclick: async e => {
+          if (e.target.textContent !== "Sure?") { e.target.textContent = "Sure?"; return; }
+          await api("/api/batches/" + b.id, { method: "DELETE" }); if (S.batch === b.id) S.batch = null; renderScan(); } }, "Delete")));
+  });
+  root.append(setCard, scannerCard,
+    h("div", { class: "card" }, h("h2", {}, "Open files (PDF or images)"),
+      h("p", { class: "mut" }, "No setup needed. Every page is read: names, numbers, and anything written in blue pen (D = dinner, L = lunch). You then check and correct the result row by row."),
+      h("div", { class: "row" }, nm, files, go), prog),
+    h("div", { class: "card" }, h("h2", {}, "Batches ", h("button", { class: "sec", onclick: () => { S.batch = 0; S.sel.clear(); S.undo = []; show("review"); } }, "Review all batches together")),
+      bs.length ? h("table", {}, h("tr", {}, ["Name (click to rename)", "Pages", "Rows", "Confirmed", ""].map(x => h("th", {}, x))), batchRows) : h("p", { class: "mut" }, "Nothing scanned yet.")));
+}
+
+/* ---------------- Scanned pages log ---------------- */
+const STATUS = { scanned: ["Scanned - waiting to be read", ""], reading: ["Reading...", ""], scraped: ["Scraped", "ok"], failed: ["Failed", "bad"], discarded: ["Discarded", ""] };
+async function renderPages() {
+  const root = $("#pages"); root.replaceChildren();
+  const d = await api("/api/scans");
+  const f = S.pageFilter || "all";
+  const list = d.scans.filter(x => f === "all" || x.status === f);
+  const chip = (k, label) => h("button", { class: f === k ? "" : "sec", onclick: () => { S.pageFilter = k; renderPages(); } }, `${label} (${k === "all" ? d.total : (d.counts[k] || 0)})`);
+  const follow = async (job, id) => {
+    toast("Reading...", 600000);
+    for (;;) {
+      await sleep(1200);
+      const j = await api("/api/jobs/" + job);
+      if (j.pages) toast(`Reading page ${Math.min(j.page, j.pages)} of ${j.pages}...`, 600000);
+      if (j.status === "done") { toast("Read " + j.pages + " page(s)", 5000); return renderPages(); }
+      if (j.status === "error") { toast(j.error, 9000); return renderPages(); }
+    }
+  };
+  const act = (label, cls, fn) => h("button", { class: cls, onclick: async () => { try { await fn(); } catch (e) { toast(e.message, 8000); } } }, label);
+  root.append(h("div", { class: "card" }, h("h2", {}, "Scanned pages"),
+    h("p", { class: "mut" }, "Every page scanned from the scanner is recorded here with its status: Scanned (captured, waiting to be read), Scraped (read; the batch it went into is linked), Failed, or Discarded. Nothing is removed from this list."),
+    h("div", { class: "row" }, chip("all", "All"), chip("scanned", "Waiting"), chip("scraped", "Scraped"), chip("failed", "Failed"), chip("discarded", "Discarded"),
+      d.counts.scanned ? act(`Read the ${d.counts.scanned} waiting page(s) now`, "ok", async () => {
+        const st = await api("/api/settings"); const { job, id } = await api("/api/scanner/process", { method: "POST", json: { engine: st.engine } }); await follow(job, id); }) : ""),
+    d.total ? h("div", { class: "tbl" }, h("table", {}, h("thead", {}, h("tr", {}, ["Scan #", "Page", "Scanned at", "Status", "Batch", "Rows found", "Notes", ""].map(x => h("th", {}, x)))),
+      h("tbody", {}, list.map(x => h("tr", {},
+        h("td", {}, "#" + x.id),
+        h("td", {}, h("img", { src: x.thumb, loading: "lazy", style: "height:90px;width:auto;cursor:zoom-in;border:1px solid var(--line)", onclick: () => { $("#dlgimg").src = x.url; $("#dlg").showModal(); } })),
+        h("td", {}, x.scanned_at + (x.dpi ? ` (${x.dpi} dpi, ${x.mode})` : "")),
+        h("td", {}, h("span", { class: "pill " + STATUS[x.status][1] }, STATUS[x.status][0]), x.read_at ? h("div", { class: "mut" }, "read " + x.read_at) : ""),
+        h("td", {}, x.batch_id ? h("a", { href: "#", onclick: e => { e.preventDefault(); S.batch = x.batch_id; S.sel.clear(); S.undo = []; show("review"); } }, x.batch_name || "batch " + x.batch_id) : ""),
+        h("td", {}, x.rows_found ?? ""),
+        h("td", { class: "mut" }, x.note),
+        h("td", {}, x.status === "scraped" ? act("Read again", "sec", async () => { const st = await api("/api/settings"); const { job, id } = await api(`/api/scans/${x.id}/reread`, { method: "POST", json: { engine: st.engine } }); await follow(job, id); }) : "",
+          x.status === "scanned" ? act("Discard", "sec", async () => { await api(`/api/scans/${x.id}/discard`, { method: "POST", json: {} }); renderPages(); }) : "",
+          x.status === "failed" ? [act("Try again", "sec", async () => { await api(`/api/scans/${x.id}/requeue`, { method: "POST", json: {} }); renderPages(); }), " ", act("Discard", "sec", async () => { await api(`/api/scans/${x.id}/discard`, { method: "POST", json: {} }); renderPages(); })] : "",
+          x.status === "discarded" ? act("Restore", "sec", async () => { await api(`/api/scans/${x.id}/requeue`, { method: "POST", json: {} }); renderPages(); }) : ""))))))
+      : h("p", { class: "mut" }, "No pages scanned yet. Use Scan a page on the Scan tab.")));
+  if (d.counts.reading || d.counts.scanned) S.pgTimer = setTimeout(() => { if (!$("#pages").hidden) renderPages(); }, 4000);
+}
+
+/* ---------------- Review ---------------- */
+async function renderReview() {
+  const root = $("#review"); root.replaceChildren();
+  if (S.batch == null) return root.append(h("div", { class: "card mut" }, "Open or scan a batch first."));
+  const [b, groups, allBatches] = await Promise.all([api("/api/batches/" + S.batch), api("/api/groups"), api("/api/batches")]);
+  const PS = 100;  // rows per screen; thousands of rows stay fast
+  const wrap = h("div", { class: "tbl" }), stat = h("span", { class: "mut" }), undoBtn = h("button", { class: "sec", disabled: true }, "Undo");
+  const pagerTop = h("div", { class: "row" }), pagerBottom = h("div", { class: "row" });
+  S.rp = S.rp || 1;
+  const pageOf = Object.fromEntries(b.pages.map(p => [p.id, p]));
+  const put = (r, body) => api("/api/rows/" + r.id, { method: "PUT", json: body });
+
+  const FILTERS = [["all", "All rows"], ["pending", "Pending only"], ["confirmed", "Confirmed only"], ["low", "Low confidence"],
+    ["nophone", "No phone number"], ["dup", "Duplicate phone"], ["nomeal", "No meal mark"], ["meal", "Has meal mark"], ["nogroup", "Not in a group"]];
+  const passes = r => {
+    if (S.q) {
+      const hay = COLS.map(c => r[c[0]] || "").join(" ").toLowerCase();
+      if (!hay.includes(S.q.toLowerCase())) return false;
+    }
+    switch (S.filter) {
+      case "pending": return r.status !== "confirmed";
+      case "confirmed": return r.status === "confirmed";
+      case "low": return r.conf < LOW;
+      case "nophone": return !r.phones && r.status !== "header";
+      case "dup": return !!r.dup;
+      case "nomeal": return !r.meal;
+      case "meal": return !!r.meal;
+      case "nogroup": return !r.group_name;
+      default: return true;
+    }
+  };
+  const shown = () => b.rows.filter(passes);
+
+  function updUndo() { undoBtn.disabled = !S.undo.length; undoBtn.textContent = S.undo.length ? `Undo (${S.undo.length})` : "Undo"; }
+
+  function paint() {
+    const n = b.rows.filter(r => r.status === "confirmed").length, dups = b.rows.filter(r => r.dup).length;
+    stat.textContent = `${n}/${b.rows.length} confirmed` + (dups ? ` - ${dups} rows share a phone number` : "") + ` - showing ${shown().length}`;
+    const list = shown();
+    const nPages = Math.max(1, Math.ceil(list.length / PS));
+    S.rp = Math.min(Math.max(1, S.rp), nPages);
+    const slice = list.slice((S.rp - 1) * PS, S.rp * PS);
+    const go = n => { S.rp = n; paint(); wrap.scrollTop = 0; };
+    const pagerEls = () => [h("button", { class: "sec", disabled: S.rp <= 1, onclick: () => go(1) }, "<<"), h("button", { class: "sec", disabled: S.rp <= 1, onclick: () => go(S.rp - 1) }, "Prev"),
+      h("span", {}, `Screen ${S.rp} of ${nPages} (rows ${list.length ? (S.rp - 1) * PS + 1 : 0}-${Math.min(S.rp * PS, list.length)} of ${list.length})`),
+      h("button", { class: "sec", disabled: S.rp >= nPages, onclick: () => go(S.rp + 1) }, "Next"), h("button", { class: "sec", disabled: S.rp >= nPages, onclick: () => go(nPages) }, ">>"),
+      h("button", { class: "sec", onclick: () => { list.forEach(r => S.sel.add(r.id)); paint(); selInfo(); } }, `Select all ${list.length} matching`),
+      h("button", { class: "sec", onclick: () => { S.sel.clear(); paint(); selInfo(); } }, "Clear selection")];
+    pagerTop.replaceChildren(...pagerEls()); pagerBottom.replaceChildren(...pagerEls());
+    const all = h("input", { type: "checkbox", title: "Select this screen", checked: slice.length > 0 && slice.every(r => S.sel.has(r.id)),
+      onchange: e => { slice.forEach(r => e.target.checked ? S.sel.add(r.id) : S.sel.delete(r.id)); paint(); selInfo(); } });
+    const body = []; let lastPage = null;
+    slice.forEach(r => {
+      if (r.page_id !== lastPage) {
+        lastPage = r.page_id; const p = pageOf[r.page_id];
+        body.push(h("tr", { class: "pagehead" }, h("td", { colspan: 12 }, (S.batch === 0 ? `${p.batch_name} - ` : "") + `${p.source} - page ${p.page_no}  `,
+          h("a", { href: "#", onclick: e => { e.preventDefault(); $("#dlgimg").src = "/img/" + p.image; $("#dlg").showModal(); } }, "view page"), "  ",
+          h("button", { class: "sec", onclick: async () => { await api(`/api/pages/${p.id}/rows`, { method: "POST", json: {} }); renderReview(); } }, "+ add row"))));
+      }
+      body.push(rowEl(r));
+    });
+    wrap.replaceChildren(h("table", { class: "rv" }, h("thead", {}, h("tr", {}, h("th", {}, all), h("th", {}, "Scan"),
+      COLS.map(c => h("th", {}, c[1])), h("th", {}, "Group"), h("th", {}, ""))), h("tbody", {}, body)));
+    updUndo();
+  }
+
+  function rowEl(r) {
+    const low = r.conf < LOW;
+    const tr = h("tr", { class: r.status === "confirmed" ? "done" : r.status === "header" ? "header" : "" });
+    const field = k => {
+      const save = async v => {
+        const old = r[k] ?? "";
+        if (v === old) return;
+        const res = await put(r, { [k]: v });
+        S.undo.push({ id: r.id, field: k, old, oldPhones: r.phones });
+        if (S.undo.length > 100) S.undo.shift();
+        r[k] = v; r.conf = 1; if (k === "number") r.phones = res.phones;
+        paint();
+      };
+      let el;
+      if (k === "meal") {
+        const opts = ["", "D", "L", "\u2713", "?"]; if (!opts.includes(r.meal)) opts.push(r.meal);
+        el = h("select", { onchange: e => save(e.target.value) }, opts.map(o => h("option", { value: o, selected: r.meal === o }, o || "-")));
+      } else el = h("input", { value: r[k] ?? "", title: k === "phones" && r.dup ? "Also on another row: " + r.dup : "", onchange: e => save(e.target.value) });
+      return h("td", { class: (low ? "low " : "") + (k === "phones" && r.dup ? "dup" : "") }, el);
+    };
+    put_in(tr,
+      h("td", {}, h("input", { type: "checkbox", checked: S.sel.has(r.id), onchange: e => { e.target.checked ? S.sel.add(r.id) : S.sel.delete(r.id); selInfo(); } })),
+      h("td", { class: "scan" }, h("img", { loading: "lazy", title: "Click to enlarge", style: "cursor:zoom-in", src: `/api/rows/${r.id}/crop`, onclick: e => { $("#dlgimg").src = e.target.src; $("#dlg").showModal(); } })),
+      COLS.map(c => field(c[0])),
+      h("td", {}, r.group_name ? h("span", { class: "pill ok" }, r.group_name) : "", r.dup ? h("span", { class: "pill bad", title: "Phone also on another row" }, "dup") : ""),
+      h("td", {}, r.status === "confirmed"
+        ? h("button", { class: "sec", onclick: async () => { await put(r, { status: "pending" }); r.status = "pending"; paint(); } }, "Reopen")
+        : h("button", { class: "ok", onclick: async () => { await put(r, { status: "confirmed" }); r.status = "confirmed"; paint(); } }, r.status === "header" ? "Keep as data" : "Confirm"),
+      " ", h("button", { class: "sec", title: "Insert an empty row below", onclick: async () => { await api(`/api/rows/${r.id}/insert-after`, { method: "POST", json: {} }); renderReview(); } }, "+"), " ",
+      h("button", { class: "bad", title: "Delete row", onclick: async () => { await api("/api/rows/" + r.id, { method: "DELETE" }); b.rows.splice(b.rows.indexOf(r), 1); S.sel.delete(r.id); paint(); } }, "x")));
+    return tr;
+  }
+
+  undoBtn.onclick = async () => {
+    const u = S.undo.pop(); if (!u) return;
+    const r = b.rows.find(x => x.id === u.id);
+    if (!r) return paint();
+    const res = await put(r, { [u.field]: u.old });
+    r[u.field] = u.old; if (u.field === "number") r.phones = res.phones; paint(); toast("Undone");
+  };
+
+  const selInfo = () => { selText.textContent = S.sel.size ? `${S.sel.size} selected` : "none selected"; };
+  const selText = h("b", {});
+  const gsel = h("select", {}, h("option", { value: "" }, "- choose group -"), groups.map(g => h("option", { value: g.id }, `${g.name} (${g.count})`)));
+  const gnew = h("input", { placeholder: "...or new group name" });
+  const bulk = async (action, extra = {}) => {
+    const ids = [...S.sel]; if (!ids.length) return toast("Tick some rows first");
+    await api("/api/rows/bulk", { method: "POST", json: { ids, action, ...extra } }); S.sel.clear(); renderReview();
+  };
+  const title = h("input", { value: b.name, style: "font-weight:600;font-size:15px;min-width:260px", title: "Click to rename this batch",
+    onchange: async e => { try { await api("/api/batches/" + b.id, { method: "PUT", json: { name: e.target.value } }); toast("Renamed"); } catch (x) { toast(x.message); } } });
+
+  root.append(h("div", { class: "card" },
+    h("h2", {}, "Review: ", S.batch === 0 ? "All batches" : title, " ",
+      h("select", { onchange: e => { S.batch = +e.target.value; S.sel.clear(); S.undo = []; S.rp = 1; renderReview(); } },
+        h("option", { value: 0, selected: S.batch === 0 }, "All batches together"),
+        allBatches.map(x => h("option", { value: x.id, selected: S.batch === x.id }, `${x.name} (${x.total} rows)`)))),
+    h("p", { class: "mut" }, "Each row shows the scanned strip, then the values read from it. Yellow = low confidence, red outline = the same phone number is on another row. Every cell can be edited at any time, even after confirming or grouping (it saves when you leave the cell). Use + to insert a missing row, x to remove one. Only confirmed rows can be put into groups. Greyed rows look like headings; use Keep as data if they are real."),
+    h("div", { class: "row" }, stat, undoBtn,
+      h("input", { type: "search", placeholder: "Search any text...", value: S.q, oninput: e => { S.q = e.target.value; S.rp = 1; paint(); } }),
+      h("select", { onchange: e => { S.filter = e.target.value; S.rp = 1; paint(); } }, FILTERS.map(f => h("option", { value: f[0], selected: S.filter === f[0] }, f[1]))),
+      h("button", { class: "sec", onclick: async () => {
+        const ids = b.rows.filter(r => r.status === "pending" && r.conf >= LOW).map(r => r.id);
+        if (!ids.length) return toast("No high-confidence rows pending");
+        await api(`/api/batches/${b.id}/confirm`, { method: "POST", json: { ids } });
+        b.rows.forEach(r => ids.includes(r.id) && (r.status = "confirmed")); paint(); toast(ids.length + " rows confirmed");
+      } }, "Confirm all high-confidence"),
+      h("button", { class: "sec", onclick: async () => { await api(`/api/batches/${b.id}/confirm`, { method: "POST", json: {} }); b.rows.forEach(r => r.status === "pending" && (r.status = "confirmed")); paint(); } }, "Confirm everything"),
+      h("button", { class: "sec", onclick: () => doExport(exportQuery("batch:" + b.id, false)) }, "Export this batch")),
+    h("div", { class: "row" }, h("b", {}, "Selected rows:"), selText,
+      h("button", { class: "sec", onclick: () => bulk("confirm") }, "Confirm"),
+      h("button", { class: "sec", onclick: () => bulk("pending") }, "Reopen"),
+      h("select", { onchange: e => { if (e.target.value === "-") return; bulk("set", { field: "meal", value: e.target.value === "none" ? "" : e.target.value }); e.target.value = "-"; } },
+        h("option", { value: "-" }, "Set meal..."), h("option", { value: "D" }, "D - dinner"), h("option", { value: "L" }, "L - lunch"), h("option", { value: "\u2713" }, "check mark"), h("option", { value: "none" }, "clear meal")),
+      h("button", { class: "bad", onclick: e => { if (e.target.textContent !== "Sure?") { e.target.textContent = "Sure?"; return; } bulk("delete"); } }, "Delete"),
+      h("span", { class: "mut" }, "|"), gsel, gnew,
+      h("button", { onclick: async () => {
+        if (!S.sel.size) return toast("Tick some rows first");
+        if (!gsel.value && !gnew.value.trim()) return toast("Choose a group or type a new name");
+        const r = await api("/api/groups/assign", { method: "POST", json: { ids: [...S.sel], group_id: gsel.value ? +gsel.value : null, new_name: gnew.value } });
+        toast(`${r.moved} added to group` + (r.skipped ? `; ${r.skipped} skipped (confirm them first)` : "")); renderReview();
+      } }, "Add to group"),
+      h("button", { class: "sec", onclick: async () => {
+        const r = await api(`/api/batches/${b.id}/auto-meal`, { method: "POST", json: {} });
+        toast(`Dinner: ${r.Dinner}, Lunch: ${r.Lunch}, ticked only: ${r["Ticked (meal not specified)"] || 0} (confirmed rows)`); renderReview(); } }, "Auto-group Dinner (D) / Lunch (L)")),
+    pagerTop, wrap, pagerBottom));
+  selInfo(); paint();
+}
+
+/* ---------------- Groups & export ---------------- */
+async function renderGroups() {
+  const root = $("#groups"); root.replaceChildren();
+  const groups = await api("/api/groups");
+  if (S.group && !groups.find(g => g.id === S.group)) S.group = null;
+  const list = h("div"), detail = h("div");
+  const nn = h("input", { placeholder: "New group name" });
+
+  put_in(list, h("div", { class: "row" }, nn, h("button", { onclick: async () => {
+    if (!nn.value.trim()) return; const r = await api("/api/groups", { method: "POST", json: { name: nn.value } }); S.group = r.id; renderGroups(); } }, "Create")),
+    groups.map(g => h("div", { class: "gitem" + (g.id === S.group ? " on" : ""), onclick: () => { S.group = g.id; renderGroups(); } }, g.name, h("span", { class: "pill" }, g.count))),
+    groups.length ? "" : h("p", { class: "mut" }, "No groups yet. Create one here, or add rows to a group from the Review tab."));
+
+  if (S.group) {
+    const g = groups.find(x => x.id === S.group);
+    const mem = await api("/api/groups/" + g.id);
+    const cols = COLS.filter(c => c[0] !== "raw");
+    const gname = h("input", { value: g.name, style: "font-weight:600;font-size:15px", title: "Rename group",
+      onchange: async e => { try { await api("/api/groups/" + g.id, { method: "PUT", json: { name: e.target.value } }); renderGroups(); } catch (x) { toast(x.message); } } });
+    detail.append(h("div", { class: "card" }, h("h2", {}, gname, ` - ${g.count} people`),
+      h("div", { class: "row" }, h("button", { class: "bad", onclick: async e => {
+        if (e.target.textContent !== "Sure?") { e.target.textContent = "Sure?"; return; }
+        await api("/api/groups/" + g.id, { method: "DELETE" }); S.group = null; renderGroups(); } }, "Delete group (keeps the rows)")),
+      h("div", { class: "tbl" }, h("table", {}, h("tr", {}, cols.map(c => h("th", {}, c[1])), h("th", {}, "Batch"), h("th", {}, "")),
+        mem.map(r => h("tr", {}, cols.map(c => h("td", {}, h("input", { value: r[c[0]] ?? "", onchange: async e => {
+          await api("/api/rows/" + r.id, { method: "PUT", json: { [c[0]]: e.target.value } }); if (c[0] === "number") renderGroups(); } }))), h("td", {}, `${r.batch} p${r.page_no}`),
+          h("td", {}, h("button", { class: "sec", onclick: async () => { await api("/api/groups/assign", { method: "POST", json: { ids: [r.id] } }); renderGroups(); } }, "Remove"))))))));
+  }
+
+  const ex = S.exp;
+  const btn = h("button", {}, "Export");
+  const setBtn = () => {
+    const what = S.group ? "this group" : ex.split ? "all groups, one " + (ex.fmt === "xlsx" ? "sheet" : "file") + " each" : "all groups together";
+    btn.textContent = `Export ${what} (${ex.fmt === "xlsx" ? "Excel" : ex.split && !S.group ? "ZIP of CSVs" : "CSV"})`;
+  };
+  btn.onclick = () => doExport(exportQuery(S.group ? `group:${S.group}` : "all-groups", S.group ? false : undefined));
+  detail.append(h("div", { class: "card" }, h("h2", {}, "Export"),
+    h("p", { class: "mut" }, "Choose which columns to include. Only confirmed rows in a group are exported, exactly as shown. In the desktop app you pick where to save the file."),
+    h("div", { class: "chips" }, COLS.map(c => h("label", {}, h("input", { type: "checkbox", checked: ex.cols.includes(c[0]), onchange: e => {
+      ex.cols = COLS.map(x => x[0]).filter(k => k === c[0] ? e.target.checked : ex.cols.includes(k)); } }), c[1])),
+      h("label", {}, h("input", { type: "checkbox", checked: ex.meta, onchange: e => { ex.meta = e.target.checked; } }), "source file + page")),
+    h("div", { class: "row" },
+      h("select", { onchange: e => { ex.fmt = e.target.value; setBtn(); } }, h("option", { value: "csv", selected: ex.fmt === "csv" }, "CSV"), h("option", { value: "xlsx", selected: ex.fmt === "xlsx" }, "Excel (.xlsx)")),
+      S.group ? "" : h("label", {}, h("input", { type: "checkbox", checked: ex.split, onchange: e => { ex.split = e.target.checked; setBtn(); } }), " One file/sheet per group"), btn,
+      S.group ? h("button", { class: "sec", onclick: () => { S.group = null; renderGroups(); } }, "Switch to all groups") : "")));
+  setBtn();
+  root.append(h("div", { class: "glist" }, h("div", { class: "card" }, list), detail));
+}
+
+// open straight to a tab / batch, e.g. index.html#review/3 (also handy after a reload)
+const m = location.hash.match(/^#(projects|scan|pages|review|groups)(?:\/(\d+))?$/);
+if (m && m[2]) S.batch = +m[2];
+show(m ? m[1] : "scan");
+</script>
+</body>
+</html>
